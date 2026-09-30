@@ -9,6 +9,7 @@ Item {
   id: root
 
   readonly property string authHelper: String(Qt.resolvedUrl("bin/omafy-auth")).replace(/^file:\/\//, "")
+  readonly property string playerHelper: String(Qt.resolvedUrl("bin/omafy-player")).replace(/^file:\/\//, "")
 
   // Pushed in by the bar widget from its shell.json entry.
   property string clientId: Spotify.DEFAULT_CLIENT_ID
@@ -1063,7 +1064,7 @@ Item {
 
   Process {
     id: localPlayerStarter
-    command: ["systemctl", "--user", "start", "omafy-player.service"]
+    command: [root.playerHelper, "start"]
   }
 
   Timer {

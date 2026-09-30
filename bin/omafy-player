@@ -2,17 +2,20 @@
 # Manage Omafy's local Spotify Connect receiver (librespot as a user service).
 #
 #   omafy-player setup    # one-time Spotify sign-in, then install + start
-#   omafy-player start | stop | restart | status | logout
+#   omafy-player start | stop | restart | status | logout | uninstall
 set -euo pipefail
 
 unit=omafy-player.service
 root=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
 cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/omafy/librespot"
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+unit_path="$unit_dir/$unit"
+dropin_dir="$unit_path.d"
+cache_conf="$dropin_dir/10-omafy-cache.conf"
+bundled_unit="$root/systemd/$unit"
+manager_loaded=false
 
-install_unit() {
-  mkdir -p "$unit_dir/$unit.d"
-  ln -sfn "$root/systemd/$unit" "$unit_dir/$unit"
+cache_config() {
   # Pin the setup cache path even when the user manager has a different XDG
   # environment. Escape systemd's quoted strings and specifier expansion.
   local escaped_cache=${cache_dir//\\/\\\\}
@@ -21,15 +24,97 @@ install_unit() {
   escaped_cache=${escaped_cache//$'\n'/\\n}
   escaped_cache=${escaped_cache//$'\r'/\\r}
   escaped_cache=${escaped_cache//$'\t'/\\t}
-  printf '[Service]\nEnvironment="OMAFY_CACHE_DIR=%s"\n' "$escaped_cache" >"$unit_dir/$unit.d/10-omafy-cache.conf"
+  printf '[Service]\nEnvironment="OMAFY_CACHE_DIR=%s"\n' "$escaped_cache"
+}
+
+present() { [[ -e $1 || -L $1 ]]; }
+
+refuse() {
+  printf 'Refusing to manage Omafy receiver: %s\nReview the conflicting configuration and move it aside explicitly if you want Omafy to replace it.\n' "$1" >&2
+  exit 1
+}
+
+check_files() {
+  local path
+  for path in "$(dirname "$unit_dir")" "$unit_dir" "$dropin_dir"; do
+    if present "$path" && { [[ -L $path ]] || [[ ! -d $path ]]; }; then
+      refuse "not an ordinary directory: $path"
+    fi
+  done
+  if present "$unit_path"; then
+    [[ -L $unit_path && $(readlink -f -- "$unit_path") == "$bundled_unit" ]] ||
+      refuse "service is not a link to this Omafy installation: $unit_path"
+  fi
+  if present "$cache_conf"; then
+    [[ -f $cache_conf && ! -L $cache_conf ]] && cmp -s "$cache_conf" <(cache_config) ||
+      refuse "cache drop-in differs from Omafy's generated configuration: $cache_conf"
+  fi
+  for path in "$dropin_dir"/*.conf; do
+    if present "$path" && [[ $path != "$cache_conf" ]]; then
+      refuse "custom service drop-in: $path"
+    fi
+  done
+}
+
+check_manager() {
+  # A runtime/global unit or drop-in can shadow the files in XDG_CONFIG_HOME.
+  # Read the manager's effective identity before any lifecycle operation.
+  local properties line load_state= fragment= dropins= transient=
+  properties=$(systemctl --user show "$unit" --property=LoadState --property=FragmentPath \
+    --property=DropInPaths --property=Transient) || refuse "cannot inspect the user service manager"
+  while IFS= read -r line; do
+    case "$line" in
+      LoadState=*) load_state=${line#*=} ;;
+      FragmentPath=*) fragment=${line#*=} ;;
+      DropInPaths=*) dropins=${line#*=} ;;
+      Transient=*) transient=${line#*=} ;;
+    esac
+  done <<< "$properties"
+  manager_loaded=false
+  if [[ $load_state == not-found && -z $fragment && -z $dropins && $transient == no ]]; then
+    return
+  fi
+  [[ $load_state == loaded && $transient == no ]] || refuse "unexpected service state: ${load_state:-unknown}"
+  [[ $fragment == "$unit_path" || $fragment == "$bundled_unit" ]] ||
+    refuse "systemd resolves $unit to another service: $fragment"
+  [[ -L $unit_path && $(readlink -f -- "$unit_path") == "$bundled_unit" ]] ||
+    refuse "loaded service does not belong to this Omafy installation"
+  [[ -z $dropins || $dropins == "$cache_conf" ]] || refuse "systemd uses custom drop-ins: $dropins"
+  if [[ -n $dropins ]] && ! present "$cache_conf"; then
+    refuse "systemd still has a removed drop-in loaded; review it and reload the user manager"
+  fi
+  manager_loaded=true
+}
+
+preflight() {
+  check_files
+  check_manager
+}
+
+require_installed() {
+  preflight
+  [[ $manager_loaded == true ]] || refuse "receiver is not installed; run omafy-player setup"
+}
+
+install_unit() {
+  preflight
+  mkdir -p "$dropin_dir"
+  # Never replace a path. Matching installations are reused byte-for-byte;
+  # exclusive creation also refuses a destination created after preflight.
+  present "$unit_path" || ln -sT -- "$bundled_unit" "$unit_path"
+  if ! present "$cache_conf"; then
+    (set -o noclobber; cache_config > "$cache_conf")
+  fi
+  check_files
   systemctl --user daemon-reload
 }
 
 sign_in() {
   command -v librespot >/dev/null || { echo "librespot is not installed: omarchy pkg add librespot" >&2; exit 1; }
+  preflight
   mkdir -p "$cache_dir"
   chmod 700 "$cache_dir" "$(dirname "$cache_dir")"
-  systemctl --user stop "$unit" 2>/dev/null || true
+  if [[ $manager_loaded == true ]]; then systemctl --user stop "$unit"; fi
 
   local log
   log=$(mktemp)
@@ -49,19 +134,37 @@ sign_in() {
   chmod 600 "$cache_dir/credentials.json"
 }
 
+logout_receiver() {
+  preflight
+  if [[ $manager_loaded == true ]]; then systemctl --user disable --now "$unit"; fi
+  rm -f "$cache_dir/credentials.json"
+}
+
 case "${1:-status}" in
   setup)
-    [[ -f $cache_dir/credentials.json ]] || sign_in
+    preflight
+    if [[ ! -f $cache_dir/credentials.json ]]; then sign_in; fi
     install_unit
+    require_installed
     systemctl --user enable --now "$unit"
     echo "Omafy receiver is running."
     ;;
-  start | stop | restart) systemctl --user "$1" "$unit" ;;
+  start | stop | restart)
+    require_installed
+    systemctl --user "$1" "$unit"
+    ;;
   status) systemctl --user is-active "$unit" ;;
   logout)
-    systemctl --user disable --now "$unit" 2>/dev/null || true
-    rm -f "$cache_dir/credentials.json"
+    logout_receiver
     echo "Receiver signed out and disabled."
     ;;
-  *) echo "usage: omafy-player setup|start|stop|restart|status|logout" >&2; exit 2 ;;
+  uninstall)
+    logout_receiver
+    check_files
+    rm -f -- "$unit_path" "$cache_conf"
+    if [[ -d $dropin_dir ]]; then rmdir --ignore-fail-on-non-empty -- "$dropin_dir"; fi
+    systemctl --user daemon-reload
+    echo "Omafy receiver uninstalled."
+    ;;
+  *) echo "usage: omafy-player setup|start|stop|restart|status|logout|uninstall" >&2; exit 2 ;;
 esac

@@ -7,7 +7,7 @@ the Spotify app. A small librespot receiver plays audio locally as **Omafy**.
 comparison — about **97% less**. This includes the receiver, service, and two
 bar widgets. [Measurement details](#memory-footprint).
 
-Requires Omarchy Quattro with Quickshell, Python 3, Bash/coreutils, `xdg-open`,
+Requires Omarchy Quattro with Quickshell, Python 3, Bash/coreutils, diffutils, `xdg-open`,
 and Spotify API access. Local playback also requires `librespot` with its
 PulseAudio backend and a working PulseAudio-compatible server (such as
 PipeWire-Pulse). Playback control requires Spotify Premium.
@@ -49,8 +49,15 @@ Tokens are stored in `~/.local/state/omafy/token.json` (mode 0600) and
 refreshed automatically.
 
 The helpers honor `XDG_STATE_HOME`, `XDG_CACHE_HOME`, and `XDG_CONFIG_HOME`.
-Player setup installs a systemd drop-in with the selected cache path; rerun
-`bin/omafy-player setup` after changing `XDG_CACHE_HOME`.
+Player setup installs a systemd drop-in with the selected cache path. It reuses
+only a unit linked to this Omafy installation and an unchanged generated drop-in.
+It refuses conflicting units, symlinks, or custom drop-ins before stopping a
+service or changing its configuration. Start, stop, logout, and uninstall use the
+same checks. Conflicts must be reviewed and moved aside manually. If you change
+`XDG_CACHE_HOME`, review and move aside the old `10-omafy-cache.conf` before
+rerunning setup; existing configuration is never overwritten. After manually
+changing unit files or drop-ins, run `systemctl --user daemon-reload` before
+retrying the helper.
 
 ## Using it
 
@@ -77,7 +84,7 @@ Keybinding-friendly IPC:
 omarchy-shell omafy playPause   # also: playHere, next, previous, like, volumeUp, volumeDown, login, status, search, browse
 ```
 
-The player helper also accepts `start`, `stop`, `restart`, `status`, and `logout`.
+The player helper also accepts `start`, `stop`, `restart`, `status`, `logout`, and `uninstall`.
 
 ## Memory footprint
 
@@ -103,13 +110,13 @@ Stop the receiver, remove its credentials, and disconnect the bar before
 removing the plugin:
 
 ```bash
-~/.config/omarchy/plugins/jaredm.omafy/bin/omafy-player logout
+~/.config/omarchy/plugins/jaredm.omafy/bin/omafy-player uninstall
 ~/.config/omarchy/plugins/jaredm.omafy/bin/omafy-auth logout
 omarchy plugin remove jaredm.omafy
-rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omafy-player.service"
-rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omafy-player.service.d/10-omafy-cache.conf"
-systemctl --user daemon-reload
 ```
+
+If the receiver helper reports a configuration conflict, resolve it before
+removing the plugin. Customized services and drop-ins are left untouched.
 
 Cached artwork metadata and audio remain under `${XDG_CACHE_HOME:-~/.cache}/omafy`;
 you can delete that directory to reclaim the disk space.

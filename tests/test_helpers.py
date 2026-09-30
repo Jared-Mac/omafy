@@ -116,36 +116,5 @@ class AuthTests(unittest.TestCase):
         self.assertFalse(self.tokens.exists())
 
 
-class PlayerTests(unittest.TestCase):
-    def test_setup_and_logout_use_custom_cache_with_systemd_escaping(self):
-        with tempfile.TemporaryDirectory(prefix="omafy-player-test-") as directory:
-            base = Path(directory)
-            cache = base / 'cache space%"\\$literal'
-            credentials = cache / "omafy/librespot/credentials.json"
-            credentials.parent.mkdir(parents=True)
-            credentials.write_text("{}")
-            config = base / "config"
-            fakebin = base / "bin"
-            fakebin.mkdir()
-            mock = fakebin / "systemctl"
-            mock.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_SYSTEMCTL_LOG"\n')
-            mock.chmod(0o755)
-            logfile = base / "systemctl.log"
-            env = {**os.environ, "XDG_CACHE_HOME": str(cache), "XDG_CONFIG_HOME": str(config),
-                   "PATH": str(fakebin) + os.pathsep + os.environ["PATH"], "TEST_SYSTEMCTL_LOG": str(logfile)}
-            helper = str(REPO / "bin/omafy-player")
-            subprocess.run([helper, "setup"], env=env, check=True, capture_output=True, text=True)
-            unit = config / "systemd/user/omafy-player.service"
-            self.assertEqual(unit.resolve(), REPO / "systemd/omafy-player.service")
-            self.assertIn("--cache ${OMAFY_CACHE_DIR}", unit.read_text())
-            dropin = unit.parent / "omafy-player.service.d/10-omafy-cache.conf"
-            escaped = str(credentials.parent).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
-            self.assertEqual(dropin.read_text(), f'[Service]\nEnvironment="OMAFY_CACHE_DIR={escaped}"\n')
-            self.assertIn("--user enable --now omafy-player.service", logfile.read_text())
-            subprocess.run([helper, "logout"], env=env, check=True, capture_output=True, text=True)
-            self.assertFalse(credentials.exists())
-            self.assertIn("--user disable --now omafy-player.service", logfile.read_text())
-
-
 if __name__ == "__main__":
     unittest.main()

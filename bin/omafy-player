@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Manage Omafy's local Spotify Connect receiver (librespot as a user service).
+#
+#   omafy-player setup    # one-time Spotify sign-in, then install + start
+#   omafy-player start | stop | restart | status | logout
+set -euo pipefail
+
+unit=omafy-player.service
+root=$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)
+cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/omafy/librespot"
+unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+install_unit() {
+  mkdir -p "$unit_dir"
+  ln -sfn "$root/systemd/$unit" "$unit_dir/$unit"
+  systemctl --user daemon-reload
+}
+
+sign_in() {
+  command -v librespot >/dev/null || { echo "librespot is not installed: omarchy pkg add librespot" >&2; exit 1; }
+  mkdir -p "$cache_dir"
+  chmod 700 "$cache_dir" "$(dirname "$cache_dir")"
+  systemctl --user stop "$unit" 2>/dev/null || true
+
+  local log
+  log=$(mktemp)
+  librespot --enable-oauth --name Omafy --backend pulseaudio \
+    --cache "$cache_dir" --disable-audio-cache --disable-discovery >"$log" 2>&1 &
+  local pid=$!
+
+  for _ in $(seq 1 300); do
+    if grep -q "Authenticated as" "$log"; then break; fi
+    if ! kill -0 "$pid" 2>/dev/null; then cat "$log" >&2; exit 1; fi
+    sleep 1
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  grep -q "Authenticated as" "$log" || { echo "Spotify sign-in timed out" >&2; rm -f "$log"; exit 1; }
+  rm -f "$log"
+  chmod 600 "$cache_dir/credentials.json"
+}
+
+case "${1:-status}" in
+  setup)
+    [[ -f $cache_dir/credentials.json ]] || sign_in
+    install_unit
+    systemctl --user enable --now "$unit"
+    echo "Omafy receiver is running."
+    ;;
+  start | stop | restart) systemctl --user "$1" "$unit" ;;
+  status) systemctl --user is-active "$unit" ;;
+  logout)
+    systemctl --user disable --now "$unit" 2>/dev/null || true
+    rm -f "$cache_dir/credentials.json"
+    echo "Receiver signed out and disabled."
+    ;;
+  *) echo "usage: omafy-player setup|start|stop|restart|status|logout" >&2; exit 2 ;;
+esac

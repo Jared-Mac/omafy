@@ -1,0 +1,29 @@
+[Unit]
+Description=Omafy Spotify Connect receiver (librespot)
+Documentation=https://github.com/librespot-org/librespot
+After=pipewire-pulse.service sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+Environment=OMAFY_DEVICE_NAME=Omafy
+# Signs in with the credentials cached by `omafy-player setup`. Played audio
+# is cached (capped) so replays don't hit the network again.
+ExecStart=/usr/bin/librespot \
+  --quiet \
+  --name ${OMAFY_DEVICE_NAME} \
+  --device-type computer \
+  --backend pulseaudio \
+  --bitrate 320 \
+  --cache %h/.cache/omafy/librespot \
+  --cache-size-limit 1G \
+  --disable-discovery \
+  --initial-volume 60
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=graphical-session.target

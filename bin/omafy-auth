@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Spotify Web API auth helper for the Omafy bar plugin.
+
+Runs the Authorization Code + PKCE flow against a loopback redirect, stores the
+tokens under $XDG_STATE_HOME/omafy/token.json (mode 0600), and hands fresh
+access tokens to the shell on demand.
+
+  omafy-auth login [--client-id ID] [--no-browser]
+  omafy-auth token        # prints {"access_token": ..., "expires_at": ...}
+  omafy-auth status
+  omafy-auth logout
+"""
+
+import argparse
+import base64
+import hashlib
+import http.server
+import json
+import os
+import secrets
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DEFAULT_CLIENT_ID = "8830ae6c6cd24316aa148cd3cce88bdb"
+REDIRECT_HOST = "127.0.0.1"
+REDIRECT_PORT = 8989
+REDIRECT_PATH = "/login"
+REDIRECT_URI = f"http://{REDIRECT_HOST}:{REDIRECT_PORT}{REDIRECT_PATH}"
+AUTH_URL = "https://accounts.spotify.com/authorize"
+TOKEN_URL = "https://accounts.spotify.com/api/token"
+SCOPES = [
+    "user-read-playback-state",
+    "user-modify-playback-state",
+    "user-read-currently-playing",
+    "user-library-read",
+    "user-library-modify",
+    "playlist-read-private",
+    "playlist-read-collaborative",
+    "user-read-recently-played",
+]
+
+STATE_DIR = os.path.join(
+    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "omafy"
+)
+TOKEN_PATH = os.path.join(STATE_DIR, "token.json")
+LOGIN_TIMEOUT_S = 300
+
+EXIT_NOT_LOGGED_IN = 2
+EXIT_REFRESH_FAILED = 3
+
+
+def emit(obj, code=0):
+    print(json.dumps(obj))
+    sys.exit(code)
+
+
+def load_tokens():
+    try:
+        with open(TOKEN_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def save_tokens(data):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = TOKEN_PATH + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, TOKEN_PATH)
+
+
+def token_request(params):
+    body = urllib.parse.urlencode(params).encode()
+    req = urllib.request.Request(
+        TOKEN_URL,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.load(resp), None
+    except urllib.error.HTTPError as e:
+        try:
+            payload = json.load(e)
+        except Exception:
+            payload = {}
+        return None, payload.get("error") or f"http_{e.code}"
+    except (urllib.error.URLError, TimeoutError) as e:
+        return None, f"network: {e}"
+
+
+def store_grant(grant, client_id, previous_refresh=None):
+    data = {
+        "client_id": client_id,
+        "access_token": grant["access_token"],
+        "refresh_token": grant.get("refresh_token") or previous_refresh,
+        "expires_at": int(time.time()) + int(grant.get("expires_in", 3600)),
+        "scope": grant.get("scope", ""),
+    }
+    save_tokens(data)
+    return data
+
+
+def token_output(data):
+    return {
+        "access_token": data["access_token"],
+        "expires_at": data["expires_at"],
+        "scope": data.get("scope", ""),
+        "wanted_scope": " ".join(SCOPES),
+    }
+
+
+def cmd_token(_args):
+    data = load_tokens()
+    if not data or not data.get("refresh_token"):
+        emit({"error": "not_logged_in"}, EXIT_NOT_LOGGED_IN)
+
+    if data.get("expires_at", 0) - time.time() > 60:
+        emit(token_output(data))
+
+    grant, err = token_request(
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": data["refresh_token"],
+            "client_id": data["client_id"],
+        }
+    )
+    if grant is None:
+        if err == "invalid_grant":
+            # The refresh token was revoked or rotated away; force a fresh login.
+            os.remove(TOKEN_PATH)
+            emit({"error": "not_logged_in"}, EXIT_NOT_LOGGED_IN)
+        emit({"error": err}, EXIT_REFRESH_FAILED)
+
+    # Refresh responses may omit scope; keep what the original grant had.
+    grant.setdefault("scope", data.get("scope", ""))
+    data = store_grant(grant, data["client_id"], data["refresh_token"])
+    emit(token_output(data))
+
+
+def cmd_status(_args):
+    data = load_tokens()
+    if not data or not data.get("refresh_token"):
+        emit({"logged_in": False}, EXIT_NOT_LOGGED_IN)
+    emit(
+        {
+            "logged_in": True,
+            "client_id": data.get("client_id"),
+            "scope": data.get("scope", ""),
+            "expires_at": data.get("expires_at"),
+        }
+    )
+
+
+def cmd_logout(_args):
+    try:
+        os.remove(TOKEN_PATH)
+    except FileNotFoundError:
+        pass
+    emit({"logged_in": False})
+
+
+SUCCESS_PAGE = """<!doctype html><meta charset="utf-8"><title>Omafy</title>
+<style>:root{color-scheme:light dark}body{font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0}</style>
+<main><h1>Omafy is connected</h1><p>You can close this tab.</p></main>"""
+
+FAILURE_PAGE = """<!doctype html><meta charset="utf-8"><title>Omafy</title>
+<style>:root{color-scheme:light dark}body{font:16px system-ui;display:grid;place-items:center;height:100vh;margin:0}</style>
+<main><h1>Spotify sign-in failed</h1><p>{error}</p></main>"""
+
+
+def cmd_login(args):
+    client_id = args.client_id or DEFAULT_CLIENT_ID
+    verifier = secrets.token_urlsafe(64)[:96]
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+        .rstrip(b"=")
+        .decode()
+    )
+    state = secrets.token_hex(16)
+    url = AUTH_URL + "?" + urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "response_type": "code",
+            "redirect_uri": REDIRECT_URI,
+            "code_challenge_method": "S256",
+            "code_challenge": challenge,
+            "state": state,
+            "scope": " ".join(SCOPES),
+        }
+    )
+
+    result = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            if parsed.path != REDIRECT_PATH:
+                self.send_response(404)
+                self.end_headers()
+                return
+            query = dict(urllib.parse.parse_qsl(parsed.query))
+            if query.get("state") != state:
+                result["error"] = "state mismatch"
+            elif "error" in query:
+                result["error"] = query["error"]
+            elif "code" in query:
+                result["code"] = query["code"]
+            else:
+                result["error"] = "no authorization code returned"
+            page = SUCCESS_PAGE if "code" in result else FAILURE_PAGE.replace(
+                "{error}", result.get("error", "")
+            )
+            body = page.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    try:
+        server = http.server.HTTPServer((REDIRECT_HOST, REDIRECT_PORT), Handler)
+    except OSError as e:
+        emit({"error": f"could not listen on {REDIRECT_URI}: {e}"}, 1)
+    server.timeout = 1
+
+    if args.no_browser:
+        print(url, file=sys.stderr)
+    else:
+        subprocess.Popen(
+            ["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+    deadline = time.time() + LOGIN_TIMEOUT_S
+    while not result and time.time() < deadline:
+        server.handle_request()
+    server.server_close()
+
+    if "code" not in result:
+        emit({"error": result.get("error", "timed out waiting for Spotify")}, 1)
+
+    grant, err = token_request(
+        {
+            "grant_type": "authorization_code",
+            "code": result["code"],
+            "redirect_uri": REDIRECT_URI,
+            "client_id": client_id,
+            "code_verifier": verifier,
+        }
+    )
+    if grant is None:
+        emit({"error": err}, 1)
+
+    store_grant(grant, client_id)
+    emit({"logged_in": True})
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="omafy-auth")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    login = sub.add_parser("login")
+    login.add_argument("--client-id")
+    login.add_argument("--no-browser", action="store_true")
+    sub.add_parser("token")
+    sub.add_parser("status")
+    sub.add_parser("logout")
+    args = parser.parse_args()
+    {"login": cmd_login, "token": cmd_token, "status": cmd_status, "logout": cmd_logout}[
+        args.cmd
+    ](args)
+
+
+if __name__ == "__main__":
+    main()

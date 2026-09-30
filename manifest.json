@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "id": "jaredm.omafy",
+  "name": "Omafy",
+  "version": "0.1.0",
+  "author": "Jared",
+  "license": "MIT",
+  "description": "Spotify now-playing and remote control for the Omarchy bar, powered by the Spotify Web API.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omafy (Spotify)",
+    "description": "Current Spotify track; click for controls, devices, and likes.",
+    "category": "Media",
+    "aliases": [
+      "spotify",
+      "music",
+      "omafy"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": {
+      "showArtist": true,
+      "hideWhenIdle": false,
+      "greenWhenPlaying": true,
+      "maxLabelWidth": 220,
+      "pollIntervalMs": 5000,
+      "clientId": ""
+    },
+    "schema": [
+      {
+        "key": "showArtist",
+        "type": "boolean",
+        "label": "Show artist in bar",
+        "defaultValue": true
+      },
+      {
+        "key": "hideWhenIdle",
+        "type": "boolean",
+        "label": "Hide when nothing is playing",
+        "defaultValue": false
+      },
+      {
+        "key": "greenWhenPlaying",
+        "type": "boolean",
+        "label": "Spotify green icon while playing",
+        "defaultValue": true
+      },
+      {
+        "key": "maxLabelWidth",
+        "type": "integer",
+        "label": "Maximum label width",
+        "min": 80,
+        "max": 600,
+        "step": 10,
+        "defaultValue": 220
+      },
+      {
+        "key": "pollIntervalMs",
+        "type": "integer",
+        "label": "Refresh interval while playing (ms)",
+        "min": 1000,
+        "max": 10000,
+        "step": 500,
+        "defaultValue": 5000,
+        "description": "Track changes are also caught exactly at the end of each song, so this can stay relaxed."
+      },
+      {
+        "key": "clientId",
+        "type": "string",
+        "label": "Spotify Developer client ID",
+        "defaultValue": "",
+        "description": "Leave empty to use the built-in client ID. Changing it needs a fresh Connect."
+      }
+    ]
+  }
+}

@@ -49,7 +49,12 @@ function parsePlayer(payload) {
   }
 }
 
+function isSuccess(status) {
+  return status >= 200 && status < 300
+}
+
 function errorMessage(status, payload) {
+  if (status === 0) return "Could not reach Spotify. Check your connection and sign-in."
   var reason = payload && payload.error ? (payload.error.reason || payload.error.message || "") : ""
   if (reason === "NO_ACTIVE_DEVICE") return "No active device. Pick one below."
   if (reason === "PREMIUM_REQUIRED" || status === 403) return "Playback control requires Spotify Premium."

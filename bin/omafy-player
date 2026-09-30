@@ -11,8 +11,17 @@ cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/omafy/librespot"
 unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 install_unit() {
-  mkdir -p "$unit_dir"
+  mkdir -p "$unit_dir/$unit.d"
   ln -sfn "$root/systemd/$unit" "$unit_dir/$unit"
+  # Pin the setup cache path even when the user manager has a different XDG
+  # environment. Escape systemd's quoted strings and specifier expansion.
+  local escaped_cache=${cache_dir//\\/\\\\}
+  escaped_cache=${escaped_cache//\"/\\\"}
+  escaped_cache=${escaped_cache//%/%%}
+  escaped_cache=${escaped_cache//$'\n'/\\n}
+  escaped_cache=${escaped_cache//$'\r'/\\r}
+  escaped_cache=${escaped_cache//$'\t'/\\t}
+  printf '[Service]\nEnvironment="OMAFY_CACHE_DIR=%s"\n' "$escaped_cache" >"$unit_dir/$unit.d/10-omafy-cache.conf"
   systemctl --user daemon-reload
 }
 

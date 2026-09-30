@@ -1,0 +1,151 @@
+import argparse
+import contextlib
+import io
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+
+REPO = Path(__file__).resolve().parents[1]
+
+
+class AuthTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="omafy-auth-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.state = Path(self.temp.name) / "omafy"
+        self.tokens = self.state / "token.json"
+        self.auth = runpy.run_path(str(REPO / "bin/omafy-auth"))["cmd_token"].__globals__
+        self.auth.update(STATE_DIR=str(self.state), TOKEN_PATH=str(self.tokens))
+        self.original = {
+            "client_id": "dummy-client", "access_token": "cached-token",
+            "refresh_token": "refresh-token", "expires_at": int(time.time()) + 3600,
+            "scope": "user-library-read", "cache_key": "original-cache-key",
+        }
+        self.auth["save_tokens"](self.original)
+
+    def command(self, name, args=None, expected_exit=0):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+            self.auth[name](args)
+        self.assertEqual(raised.exception.code, expected_exit)
+        return json.loads(output.getvalue())
+
+    def test_cached_token_does_not_refresh(self):
+        with patch.dict(self.auth, token_request=lambda _: self.fail("unexpected network request")):
+            output = self.command("cmd_token", argparse.Namespace(force_refresh=False))
+        self.assertEqual(output["access_token"], "cached-token")
+        self.assertEqual(output["cache_key"], "original-cache-key")
+
+    def test_forced_refresh_preserves_grant_identity_scope_and_refresh_token(self):
+        calls = []
+
+        def request(params):
+            calls.append(params)
+            return {"access_token": "replacement-token", "expires_in": 3600}, None
+
+        with patch.dict(self.auth, token_request=request):
+            output = self.command("cmd_token", argparse.Namespace(force_refresh=True))
+        saved = json.loads(self.tokens.read_text())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["grant_type"], "refresh_token")
+        self.assertEqual(output["access_token"], "replacement-token")
+        self.assertEqual(output["cache_key"], "original-cache-key")
+        self.assertEqual(saved["refresh_token"], "refresh-token")
+        self.assertEqual(output["scope"], "user-library-read")
+
+    def test_expired_token_refreshes_and_preserves_rotated_credentials(self):
+        self.auth["save_tokens"]({**self.original, "expires_at": 0})
+        with patch.dict(self.auth, token_request=lambda _: ({"access_token": "fresh", "refresh_token": "rotated"}, None)):
+            output = self.command("cmd_token", argparse.Namespace(force_refresh=False))
+        self.assertEqual(output["access_token"], "fresh")
+        self.assertEqual(json.loads(self.tokens.read_text())["refresh_token"], "rotated")
+
+    def test_legacy_tokens_gain_a_stable_cache_key(self):
+        legacy = dict(self.original)
+        del legacy["cache_key"]
+        self.auth["save_tokens"](legacy)
+        output = self.command("cmd_token", argparse.Namespace(force_refresh=False))
+        again = self.command("cmd_token", argparse.Namespace(force_refresh=False))
+        self.assertTrue(output["cache_key"])
+        self.assertEqual(output["cache_key"], again["cache_key"])
+        self.assertEqual(self.tokens.stat().st_mode & 0o777, 0o600)
+
+    def test_each_sign_in_has_a_new_cache_key(self):
+        first = self.auth["store_grant"]({"access_token": "first", "refresh_token": "r1"}, "client")
+        second = self.auth["store_grant"]({"access_token": "second", "refresh_token": "r2"}, "client")
+        self.assertNotEqual(first["cache_key"], second["cache_key"])
+
+    def test_revoked_refresh_token_removes_saved_credentials(self):
+        with patch.dict(self.auth, token_request=lambda _: (None, "invalid_grant")):
+            output = self.command("cmd_token", argparse.Namespace(force_refresh=True), expected_exit=2)
+        self.assertEqual(output["error"], "not_logged_in")
+        self.assertFalse(self.tokens.exists())
+
+    def test_refresh_network_failure_preserves_credentials(self):
+        with patch.dict(self.auth, token_request=lambda _: (None, "network: unavailable")):
+            output = self.command("cmd_token", argparse.Namespace(force_refresh=True), expected_exit=3)
+        self.assertIn("network", output["error"])
+        self.assertEqual(json.loads(self.tokens.read_text()), self.original)
+
+    def test_logout_waits_for_a_concurrent_writer_then_removes_its_result(self):
+        with self.auth["token_lock"]():
+            process = subprocess.Popen(
+                [sys.executable, str(REPO / "bin/omafy-auth"), "logout"],
+                env={**os.environ, "XDG_STATE_HOME": self.temp.name},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    process.wait(timeout=0.2)
+                self.auth["save_tokens"]({**self.original, "access_token": "late-writer"})
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
+        stdout, stderr = process.communicate(timeout=5)
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(json.loads(stdout), {"logged_in": False})
+        self.assertFalse(self.tokens.exists())
+
+
+class PlayerTests(unittest.TestCase):
+    def test_setup_and_logout_use_custom_cache_with_systemd_escaping(self):
+        with tempfile.TemporaryDirectory(prefix="omafy-player-test-") as directory:
+            base = Path(directory)
+            cache = base / 'cache space%"\\$literal'
+            credentials = cache / "omafy/librespot/credentials.json"
+            credentials.parent.mkdir(parents=True)
+            credentials.write_text("{}")
+            config = base / "config"
+            fakebin = base / "bin"
+            fakebin.mkdir()
+            mock = fakebin / "systemctl"
+            mock.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_SYSTEMCTL_LOG"\n')
+            mock.chmod(0o755)
+            logfile = base / "systemctl.log"
+            env = {**os.environ, "XDG_CACHE_HOME": str(cache), "XDG_CONFIG_HOME": str(config),
+                   "PATH": str(fakebin) + os.pathsep + os.environ["PATH"], "TEST_SYSTEMCTL_LOG": str(logfile)}
+            helper = str(REPO / "bin/omafy-player")
+            subprocess.run([helper, "setup"], env=env, check=True, capture_output=True, text=True)
+            unit = config / "systemd/user/omafy-player.service"
+            self.assertEqual(unit.resolve(), REPO / "systemd/omafy-player.service")
+            self.assertIn("--cache ${OMAFY_CACHE_DIR}", unit.read_text())
+            dropin = unit.parent / "omafy-player.service.d/10-omafy-cache.conf"
+            escaped = str(credentials.parent).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+            self.assertEqual(dropin.read_text(), f'[Service]\nEnvironment="OMAFY_CACHE_DIR={escaped}"\n')
+            self.assertIn("--user enable --now omafy-player.service", logfile.read_text())
+            subprocess.run([helper, "logout"], env=env, check=True, capture_output=True, text=True)
+            self.assertFalse(credentials.exists())
+            self.assertIn("--user disable --now omafy-player.service", logfile.read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()

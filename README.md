@@ -40,6 +40,10 @@ locally as the Spotify Connect device "Omafy".
 Tokens are stored in `~/.local/state/omafy/token.json` (mode 0600) and
 refreshed automatically.
 
+The helpers honor `XDG_STATE_HOME`, `XDG_CACHE_HOME`, and `XDG_CONFIG_HOME`.
+Player setup installs a systemd drop-in with the selected cache path; rerun
+`bin/omafy-player setup` after changing `XDG_CACHE_HOME`.
+
 ## Using it
 
 | Input | Action |
@@ -82,6 +86,10 @@ Playback control requires Spotify Premium. Free accounts still see what's playin
 - Polling is relaxed (5s playing, 8s idle); an extra poll lands exactly when
   the current track ends, and progress is interpolated locally.
 
+Library and playlist lists follow every page returned by Spotify. Caches are
+tied to a sign-in, preserved across token refreshes, and cleared on Disconnect
+or a new sign-in. Older caches without this association are ignored.
+
 ## Settings (`~/.config/omarchy/shell.json` entry)
 
 | Key | Default | |
@@ -104,3 +112,18 @@ Playback control requires Spotify Premium. Free accounts still see what's playin
 ```bash
 bin/omafy-auth status | login | token | logout
 ```
+
+`bin/omafy-auth token --force-refresh` obtains a new access token even when the
+stored one has not expired. The service uses this when Spotify rejects a token.
+
+## Development checks
+
+```bash
+bash tests/run.sh
+```
+
+Requires Node.js and Python 3. Tests cover authentication races, account cache
+isolation, pagination, command failures, playback sequencing, and receiver
+setup. When Quickshell is installed, the runner also loads the service offscreen
+with temporary state and cache directories. Tests use dummy credentials and
+mock network/service calls; they do not control Spotify playback.

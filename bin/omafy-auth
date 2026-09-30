@@ -6,13 +6,15 @@ tokens under $XDG_STATE_HOME/omafy/token.json (mode 0600), and hands fresh
 access tokens to the shell on demand.
 
   omafy-auth login [--client-id ID] [--no-browser]
-  omafy-auth token        # prints {"access_token": ..., "expires_at": ...}
+  omafy-auth token [--force-refresh]  # prints the token, expiry, and cache key
   omafy-auth status
   omafy-auth logout
 """
 
 import argparse
 import base64
+import contextlib
+import fcntl
 import hashlib
 import http.server
 import json
@@ -75,6 +77,16 @@ def save_tokens(data):
     os.replace(tmp, TOKEN_PATH)
 
 
+@contextlib.contextmanager
+def token_lock():
+    """Serialize refresh, sign-in writes, and logout across helper processes."""
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    fd = os.open(os.path.join(STATE_DIR, "token.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(fd, "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def token_request(params):
     body = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request(
@@ -95,13 +107,14 @@ def token_request(params):
         return None, f"network: {e}"
 
 
-def store_grant(grant, client_id, previous_refresh=None):
+def store_grant(grant, client_id, previous_refresh=None, cache_key=None):
     data = {
         "client_id": client_id,
         "access_token": grant["access_token"],
         "refresh_token": grant.get("refresh_token") or previous_refresh,
         "expires_at": int(time.time()) + int(grant.get("expires_in", 3600)),
         "scope": grant.get("scope", ""),
+        "cache_key": cache_key or secrets.token_hex(16),
     }
     save_tokens(data)
     return data
@@ -113,15 +126,25 @@ def token_output(data):
         "expires_at": data["expires_at"],
         "scope": data.get("scope", ""),
         "wanted_scope": " ".join(SCOPES),
+        "cache_key": data["cache_key"],
     }
 
 
-def cmd_token(_args):
+def cmd_token(args):
+    with token_lock():
+        refresh_token(args)
+
+
+def refresh_token(args):
     data = load_tokens()
     if not data or not data.get("refresh_token"):
         emit({"error": "not_logged_in"}, EXIT_NOT_LOGGED_IN)
 
-    if data.get("expires_at", 0) - time.time() > 60:
+    if not data.get("cache_key"):
+        data["cache_key"] = secrets.token_hex(16)
+        save_tokens(data)
+
+    if not args.force_refresh and data.get("expires_at", 0) - time.time() > 60:
         emit(token_output(data))
 
     grant, err = token_request(
@@ -140,7 +163,7 @@ def cmd_token(_args):
 
     # Refresh responses may omit scope; keep what the original grant had.
     grant.setdefault("scope", data.get("scope", ""))
-    data = store_grant(grant, data["client_id"], data["refresh_token"])
+    data = store_grant(grant, data["client_id"], data["refresh_token"], data["cache_key"])
     emit(token_output(data))
 
 
@@ -159,10 +182,11 @@ def cmd_status(_args):
 
 
 def cmd_logout(_args):
-    try:
-        os.remove(TOKEN_PATH)
-    except FileNotFoundError:
-        pass
+    with token_lock():
+        try:
+            os.remove(TOKEN_PATH)
+        except FileNotFoundError:
+            pass
     emit({"logged_in": False})
 
 
@@ -260,7 +284,8 @@ def cmd_login(args):
     if grant is None:
         emit({"error": err}, 1)
 
-    store_grant(grant, client_id)
+    with token_lock():
+        store_grant(grant, client_id)
     emit({"logged_in": True})
 
 
@@ -270,7 +295,8 @@ def main():
     login = sub.add_parser("login")
     login.add_argument("--client-id")
     login.add_argument("--no-browser", action="store_true")
-    sub.add_parser("token")
+    token = sub.add_parser("token")
+    token.add_argument("--force-refresh", action="store_true")
     sub.add_parser("status")
     sub.add_parser("logout")
     args = parser.parse_args()

@@ -134,7 +134,7 @@ Panel {
       Text {
         id: glyph
         anchors.verticalCenter: parent.verticalCenter
-        text: ""
+        text: barButton.vertical || root.labelText === "" ? "󰓇" : ""
         color: root.playing && root.greenWhenPlaying ? root.spotifyGreen
           : root.hasTrack ? root.foreground : Qt.darker(root.foreground, 1.5)
         font.family: root.fontFamily
@@ -145,7 +145,7 @@ Panel {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
-        visible: !root.vertical && root.labelText !== ""
+        visible: !barButton.vertical && root.labelText !== ""
         width: Math.min(root.maxLabelWidth, implicitWidth)
         text: root.labelText
         elide: Text.ElideRight

@@ -25,6 +25,14 @@ Item {
   property string accessToken: ""
   property real tokenExpiresAt: 0
   property var tokenWaiters: []
+  property int sessionGeneration: 0
+  property bool authEnabled: true
+  property bool tokenBusy: false
+  property bool forceTokenRefresh: false
+  property bool loginBusy: false
+  property bool loggingOut: false
+  property bool loginAfterLogout: false
+  property string cacheKey: ""
   property string lastError: ""
 
   // ---- Playback
@@ -86,30 +94,99 @@ Item {
   // instead of leaving the helper waiting out its timeout.
   function login() {
     lastError = ""
-    if (loginProcess.running) {
+    if (loggingOut) {
+      loginAfterLogout = true
+      return
+    }
+    if (loginBusy) {
       loginRestart = true
+      loginCancelled = false
       loginProcess.running = false
       return
     }
+    loginCancelled = false
     loggingIn = true
+    loginBusy = true
     loginProcess.command = [authHelper, "login", "--client-id", clientId]
     loginProcess.running = true
   }
 
   function cancelLogin() {
     loginRestart = false
-    loginCancelled = true
-    if (loginProcess.running) loginProcess.running = false
+    loginAfterLogout = false
+    loginCancelled = loginBusy
+    if (loginBusy) loginProcess.running = false
     loggingIn = false
   }
 
   function logout() {
-    logoutProcess.running = true
+    if (loggingOut) return
+    loggingOut = true
+    authEnabled = false
+    cancelLogin()
+    resetSession()
+    if (tokenBusy) tokenProcess.running = false
+    // Wait for helpers to exit before deleting their token file, so a late
+    // refresh or sign-in cannot recreate it after Disconnect.
+    completeLogout()
+  }
+
+  function completeLogout() {
+    if (loggingOut && !tokenBusy && !loginBusy && !logoutProcess.running)
+      logoutProcess.running = true
+  }
+
+  function resetSession() {
+    sessionGeneration++
     accessToken = ""
     tokenExpiresAt = 0
+    tokenWaiters = []
+    forceTokenRefresh = false
     loggedIn = false
+    cacheKey = ""
+    resetAccountState()
+    saveCache()
+    saveLibrary()
+  }
+
+  function resetAccountState() {
+    trackEndPoll.stop()
+    settlePoll.stop()
+    playAfterTransfer.stop()
+    volumeDebounce.stop()
+    noticeTimer.stop()
+    saveCacheSoon.stop()
+    saveLibrarySoon.stop()
     clearPlayback()
     devices = []
+    liked = false
+    shuffle = false
+    repeatState = "off"
+    deviceType = ""
+    disallows = ({})
+    pendingPlayDevice = ""
+    playHereAttempts = 0
+    volumeTarget = -1
+    likedCache = ({})
+    browseCache = ({})
+    backoffUntil = ({})
+    lastPollAt = 0
+    lastPollStatus = 0
+    grantedScope = ""
+    wantedScope = ""
+    searchQuery = ""
+    searchSections = []
+    searchLoading = false
+    searchError = ""
+    playlists = []
+    playlistsLoading = false
+    playlistsError = ""
+    closeList()
+    queueRows = []
+    queueLoading = false
+    queueError = ""
+    notice = ""
+    lastError = ""
   }
 
   // Resume on the local librespot receiver. librespot takes a transfer but
@@ -119,7 +196,7 @@ Item {
     lastError = ""
     withLocalDevice(function(id) {
       root.api("PUT", "/me/player", { device_ids: [id], play: true }, function(status, payload) {
-        if (status >= 400) {
+        if (!Spotify.isSuccess(status)) {
           root.lastError = Spotify.errorMessage(status, payload)
           return
         }
@@ -132,6 +209,7 @@ Item {
   // Resolve the local receiver's device id, starting its user service first
   // when Spotify doesn't list it yet (it needs a moment to register).
   function withLocalDevice(callback) {
+    if (!authEnabled) return
     playHereAttempts = 0
     if (!localPlayerStarter.running) localPlayerStarter.running = true
     findLocalDevice(callback)
@@ -139,6 +217,10 @@ Item {
 
   function findLocalDevice(callback) {
     api("GET", "/me/player/devices", null, function(status, payload) {
+      if (status !== 200) {
+        root.lastError = Spotify.errorMessage(status, payload)
+        return
+      }
       if (status === 200 && payload && Array.isArray(payload.devices)) root.devices = payload.devices
       var device = root.localDevice()
       if (device) callback(device.id)
@@ -297,8 +379,12 @@ Item {
   property string notice: ""
 
   function later(ms, fn) {
+    var generation = sessionGeneration
     var timer = delayComponent.createObject(root, { interval: ms })
-    timer.triggered.connect(function() { fn(); timer.destroy() })
+    timer.triggered.connect(function() {
+      if (generation === root.sessionGeneration && root.authEnabled) fn()
+      timer.destroy()
+    })
     timer.start()
   }
 
@@ -331,8 +417,8 @@ Item {
     if (key.indexOf("search:") !== 0) saveLibrarySoon.restart()
   }
 
-  // GET a paged list, following `next` for up to `pages` pages.
-  function fetchPaged(path, unwrapKey, pages, done, rows) {
+  // Follow every page before caching the list as complete.
+  function fetchPaged(path, unwrapKey, done, rows) {
     rows = rows || []
     api("GET", path, null, function(status, payload) {
       if (status !== 200 || !payload) {
@@ -340,8 +426,8 @@ Item {
         return
       }
       rows = rows.concat(Spotify.normalizeList(payload.items, unwrapKey))
-      if (payload.next && pages > 1)
-        root.fetchPaged(String(payload.next).replace(Spotify.API_BASE, ""), unwrapKey, pages - 1, done, rows)
+      if (payload.next)
+        root.fetchPaged(String(payload.next).replace(Spotify.API_BASE, ""), unwrapKey, done, rows)
       else
         done(200, rows, payload)
     })
@@ -395,7 +481,7 @@ Item {
     if (playlistsLoading) return
     playlistsLoading = true
     playlistsError = ""
-    fetchPaged("/me/playlists?limit=50", null, 4, function(status, rows, payload) {
+    fetchPaged("/me/playlists?limit=50", null, function(status, rows, payload) {
       root.playlistsLoading = false
       if (status === 200) {
         root.playlists = rows
@@ -410,11 +496,11 @@ Item {
     var key = "playlist:" + row.id + ":" + (row.snapshot || "")
     showList({ kind: "playlist", id: row.id, uri: row.uri, title: row.title, image: row.image },
       key, row.snapshot ? -1 : libraryTtlMs, function(done) {
-        root.fetchPaged("/playlists/" + row.id + "/items?limit=50&additional_types=episode", "track", 6,
+        root.fetchPaged("/playlists/" + row.id + "/items?limit=50&additional_types=episode", "track",
           function(status, rows, payload) {
             // Older API surface for apps that still see /tracks only.
             if (status === 404) {
-              root.fetchPaged("/playlists/" + row.id + "/tracks?limit=50&additional_types=episode", "track", 6, done)
+              root.fetchPaged("/playlists/" + row.id + "/tracks?limit=50&additional_types=episode", "track", done)
               return
             }
             done(status, rows, payload)
@@ -424,7 +510,7 @@ Item {
 
   function openLiked() {
     showList({ kind: "liked", id: "liked", title: "Liked Songs" }, "liked", libraryTtlMs, function(done) {
-      root.fetchPaged("/me/tracks?limit=50", "track", 4, done)
+      root.fetchPaged("/me/tracks?limit=50", "track", done)
     }, "Liked Songs")
   }
 
@@ -506,45 +592,65 @@ Item {
       ? { context_uri: list.uri }
       : { uris: list.rows.slice(0, 100).map(function(r) { return r.uri }) }
     if (!body.context_uri && body.uris.length === 0) return
-    if (shuffled !== shuffle) {
-      shuffle = shuffled
-      api("PUT", "/me/player/shuffle?state=" + shuffled, null, null)
-    }
-    startPlayback(body)
+    startPlayback(body, shuffled)
   }
 
   function queueRow(row) {
     if (!row || !row.uri) return
     api("POST", "/me/player/queue?uri=" + encodeURIComponent(row.uri), null, function(status, payload) {
-      if (status >= 400) root.lastError = Spotify.errorMessage(status, payload)
-      else root.flash("Added to queue: " + row.title)
+      if (!Spotify.isSuccess(status)) root.lastError = Spotify.errorMessage(status, payload)
+      else {
+        root.lastError = ""
+        root.flash("Added to queue: " + row.title)
+      }
     })
   }
 
   // Start playback on the active device, or on this computer when nothing
   // is active yet (or the active device has gone away).
-  function startPlayback(body) {
+  function startPlayback(body, shuffled) {
     lastError = ""
-    var onLocal = function() {
+    function onLocal() {
       root.withLocalDevice(function(id) {
-        root.command("PUT", "/me/player/play?device_id=" + encodeURIComponent(id), body)
+        playOn(id, false)
+      })
+    }
+    function playOn(id, allowFallback) {
+      var target = "device_id=" + encodeURIComponent(id)
+      root.api("PUT", "/me/player/play?" + target, body, function(status, payload) {
+        if (status === 404 && allowFallback) {
+          onLocal()
+          return
+        }
+        if (!Spotify.isSuccess(status)) {
+          root.lastError = Spotify.errorMessage(status, payload)
+          return
+        }
+        // The receiver must be active before it can accept shuffle. Always
+        // target the same device, and wait for playback to succeed first.
+        if (shuffled !== undefined) {
+          root.api("PUT", "/me/player/shuffle?state=" + shuffled + "&" + target, null,
+            function(shuffleStatus, shufflePayload) {
+              if (Spotify.isSuccess(shuffleStatus)) root.shuffle = shuffled
+              else root.lastError = Spotify.errorMessage(shuffleStatus, shufflePayload)
+              settlePoll.restart()
+            })
+        } else {
+          settlePoll.restart()
+        }
       })
     }
     if (!deviceId) {
       onLocal()
       return
     }
-    api("PUT", "/me/player/play", body, function(status, payload) {
-      if (status === 404) onLocal()
-      else if (status >= 400) root.lastError = Spotify.errorMessage(status, payload)
-      settlePoll.restart()
-    })
+    playOn(deviceId, true)
   }
 
   function restoreLibrary(text) {
     var data = null
     try { data = JSON.parse(String(text || "")) } catch (e) { data = null }
-    if (!data || data.version !== 1 || !data.entries) return
+    if (!data || data.version !== 2 || !cacheKey || data.cacheKey !== cacheKey || !data.entries) return
     browseCache = Object.assign({}, data.entries, browseCache)
   }
 
@@ -559,7 +665,7 @@ Item {
     // Keep the 30 most recently fetched playlists' contents.
     playlistKeys.sort(function(a, b) { return browseCache[b].t - browseCache[a].t })
     for (var i = 0; i < Math.min(30, playlistKeys.length); i++) entries[playlistKeys[i]] = browseCache[playlistKeys[i]]
-    libraryFile.setText(JSON.stringify({ version: 1, entries: entries }))
+    libraryFile.setText(JSON.stringify({ version: 2, cacheKey: cacheKey, entries: entries }))
   }
 
   Timer {
@@ -699,7 +805,7 @@ Item {
   function restoreCache(text) {
     var data = null
     try { data = JSON.parse(String(text || "")) } catch (e) { data = null }
-    if (!data || data.version !== 1) return
+    if (!data || data.version !== 2 || !cacheKey || data.cacheKey !== cacheKey) return
 
     if (data.liked && typeof data.liked === "object") likedCache = data.liked
 
@@ -743,7 +849,8 @@ Item {
       if (backoffUntil[route] > Date.now()) limits[route] = backoffUntil[route]
     }
     cacheFile.setText(JSON.stringify({
-      version: 1,
+      version: 2,
+      cacheKey: cacheKey,
       liked: liked,
       backoffUntil: limits,
       lastTrack: hasTrack ? {
@@ -758,19 +865,21 @@ Item {
   // Spotify actually did rather than what we guessed.
   function command(method, path, body) {
     api(method, path, body || null, function(status, payload) {
-      if (status >= 400) root.lastError = Spotify.errorMessage(status, payload)
+      if (!Spotify.isSuccess(status)) root.lastError = Spotify.errorMessage(status, payload)
       else root.lastError = ""
       settlePoll.restart()
     })
   }
 
-  function api(method, path, body, callback, retried) {
+  function api(method, path, body, callback, retried, forceRefresh) {
+    var generation = sessionGeneration
     var route = method + " " + path.split("?")[0]
     if (Date.now() < (backoffUntil[route] || 0)) {
       if (callback) callback(429, null)
       return
     }
     withToken(function(token) {
+      if (generation !== root.sessionGeneration) return
       if (!token) {
         if (callback) callback(0, null)
         return
@@ -778,14 +887,14 @@ Item {
       var xhr = new XMLHttpRequest()
       xhr.onreadystatechange = function() {
         if (xhr.readyState !== XMLHttpRequest.DONE) return
+        if (generation !== root.sessionGeneration || !root.authEnabled) return
         var payload = null
         if (xhr.responseText) {
           try { payload = JSON.parse(xhr.responseText) } catch (e) { payload = null }
         }
         if (xhr.status === 401 && !retried) {
-          root.accessToken = ""
-          root.tokenExpiresAt = 0
-          root.api(method, path, body, callback, true)
+          // Another request may already have refreshed this rejected token.
+          root.api(method, path, body, callback, true, !root.accessToken || root.accessToken === token)
           return
         }
         if (xhr.status === 429) {
@@ -805,35 +914,79 @@ Item {
       } else {
         xhr.send()
       }
-    })
+    }, forceRefresh)
   }
 
-  function withToken(callback) {
-    if (accessToken && tokenExpiresAt - Date.now() > 60000) {
+  function withToken(callback, forceRefresh) {
+    if (!authEnabled) {
+      callback("")
+      return
+    }
+    if (forceRefresh) {
+      accessToken = ""
+      tokenExpiresAt = 0
+      forceTokenRefresh = true
+    }
+    if (!forceTokenRefresh && accessToken && tokenExpiresAt - Date.now() > 60000) {
       callback(accessToken)
       return
     }
     var waiters = tokenWaiters.slice()
     waiters.push(callback)
     tokenWaiters = waiters
-    if (!tokenProcess.running) tokenProcess.running = true
+    startToken()
   }
 
-  function finishToken(output, exitCode) {
+  function startToken() {
+    if (tokenBusy || !authEnabled || tokenWaiters.length === 0) return
+    tokenProcess.generation = sessionGeneration
+    tokenProcess.forced = forceTokenRefresh
+    tokenProcess.command = forceTokenRefresh ? [authHelper, "token", "--force-refresh"] : [authHelper, "token"]
+    tokenBusy = true
+    tokenProcess.running = true
+  }
+
+  function finishToken(output, exitCode, generation, forced) {
+    tokenBusy = false
+    if (generation !== sessionGeneration || !authEnabled) {
+      completeLogout()
+      startToken()
+      return
+    }
+    // A 401 may arrive while an ordinary disk-token lookup is in flight.
+    // Hold its waiters until a forced refresh has actually completed.
+    if (forceTokenRefresh && !forced) {
+      startToken()
+      return
+    }
+    forceTokenRefresh = false
     var result = {}
     try { result = JSON.parse(String(output || "").trim() || "{}") } catch (e) { result = {} }
     if (exitCode === 0 && result.access_token) {
       accessToken = result.access_token
       tokenExpiresAt = Number(result.expires_at) * 1000
-      loggedIn = true
+      var nextKey = String(result.cache_key || "")
+      if (nextKey !== cacheKey) {
+        if (cacheKey) {
+          // Also handle an account change made through the CLI helper.
+          sessionGeneration++
+          tokenWaiters = []
+          loggedIn = false
+        }
+        resetAccountState()
+        cacheKey = nextKey
+        restoreLibrary(libraryFile.text())
+        restoreCache(cacheFile.text())
+      }
       grantedScope = String(result.scope || "")
       wantedScope = String(result.wanted_scope || "")
+      loggedIn = true
     } else {
       accessToken = ""
       tokenExpiresAt = 0
       if (exitCode === 2) {
-        loggedIn = false
-        clearPlayback()
+        authEnabled = false
+        resetSession()
       } else if (result.error) {
         lastError = "Token refresh failed: " + result.error
       }
@@ -846,16 +999,22 @@ Item {
 
   Process {
     id: tokenProcess
-    command: [root.authHelper, "token"]
+    property int generation: 0
+    property bool forced: false
     stdout: StdioCollector { id: tokenOut; waitForEnd: true }
-    onExited: function(exitCode) { root.finishToken(tokenOut.text, exitCode) }
+    onExited: function(exitCode) { root.finishToken(tokenOut.text, exitCode, generation, forced) }
   }
 
   Process {
     id: loginProcess
     stdout: StdioCollector { id: loginOut; waitForEnd: true }
     onExited: function(exitCode) {
+      root.loginBusy = false
       root.loggingIn = false
+      if (root.loggingOut) {
+        root.completeLogout()
+        return
+      }
       if (root.loginRestart) {
         root.loginRestart = false
         root.login()
@@ -871,7 +1030,8 @@ Item {
         root.lastError = "Sign-in failed: " + (result.error || "exit " + exitCode)
         return
       }
-      root.accessToken = ""
+      root.resetSession()
+      root.authEnabled = true
       root.withToken(function() {
         root.poll()
         root.refreshDevices()
@@ -882,6 +1042,14 @@ Item {
   Process {
     id: logoutProcess
     command: [root.authHelper, "logout"]
+    onExited: function(exitCode) {
+      root.loggingOut = false
+      if (exitCode !== 0) root.lastError = "Could not remove the saved Spotify token. Try Disconnect again."
+      if (root.loginAfterLogout) {
+        root.loginAfterLogout = false
+        root.login()
+      }
+    }
   }
 
   Timer {

@@ -7,6 +7,7 @@ Wants=sound.target
 [Service]
 Type=simple
 Environment=OMAFY_DEVICE_NAME=Omafy
+Environment=OMAFY_CACHE_DIR=%h/.cache/omafy/librespot
 # Signs in with the credentials cached by `omafy-player setup`. Played audio
 # is cached (capped) so replays don't hit the network again.
 ExecStart=/usr/bin/librespot \
@@ -15,7 +16,7 @@ ExecStart=/usr/bin/librespot \
   --device-type computer \
   --backend pulseaudio \
   --bitrate 320 \
-  --cache %h/.cache/omafy/librespot \
+  --cache ${OMAFY_CACHE_DIR} \
   --cache-size-limit 1G \
   --disable-discovery \
   --initial-volume 60

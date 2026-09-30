@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "Jared",
   "license": "MIT",
-  "description": "Spotify now-playing and remote control for the Omarchy bar, powered by the Spotify Web API.",
+  "description": "Spotify in your bar. Tiny footprint: ~34 MiB RAM vs ~1 GiB for Spotify in a local test.",
   "kinds": [
     "service",
     "bar-widget"
@@ -17,7 +17,7 @@
   },
   "barWidget": {
     "displayName": "Omafy (Spotify)",
-    "description": "Current Spotify track; click for controls, devices, and likes.",
+    "description": "Play, pause, skip, and browse Spotify from the bar. Tiny memory footprint.",
     "category": "Media",
     "aliases": [
       "spotify",

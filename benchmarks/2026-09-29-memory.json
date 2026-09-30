@@ -1,0 +1,162 @@
+{
+  "units": "MiB PSS",
+  "baseline_shell": 45.28,
+  "shell_with_service_and_two_widgets": 50.8,
+  "incremental_plugin": 5.52,
+  "receiver": 28.09,
+  "omafy_total_estimate": 33.61,
+  "spotify_total": 978.4,
+  "less_ram_percent": 96.6,
+  "runs": [
+    {
+      "mode": "baseline",
+      "shell": {
+        "pss": 43.44,
+        "rss": 106.32,
+        "uss": 28.19,
+        "swap": 0.0
+      },
+      "apps": {
+        "receiver": {
+          "pss": 28.17,
+          "rss": 39.81,
+          "uss": 26.19,
+          "swap": 3.17,
+          "processes": 1.0
+        },
+        "spotify": {
+          "pss": 978.0,
+          "rss": 1588.11,
+          "uss": 807.17,
+          "swap": 0.0,
+          "processes": 9.0
+        }
+      }
+    },
+    {
+      "mode": "omafy",
+      "shell": {
+        "pss": 51.35,
+        "rss": 121.43,
+        "uss": 33.46,
+        "swap": 0.0
+      },
+      "apps": {
+        "receiver": {
+          "pss": 27.97,
+          "rss": 39.81,
+          "uss": 26.19,
+          "swap": 3.17,
+          "processes": 1.0
+        },
+        "spotify": {
+          "pss": 977.97,
+          "rss": 1588.11,
+          "uss": 807.16,
+          "swap": 0.0,
+          "processes": 9.0
+        }
+      }
+    },
+    {
+      "mode": "omafy",
+      "shell": {
+        "pss": 50.8,
+        "rss": 120.1,
+        "uss": 32.82,
+        "swap": 0.0
+      },
+      "apps": {
+        "receiver": {
+          "pss": 28.01,
+          "rss": 39.81,
+          "uss": 26.13,
+          "swap": 3.17,
+          "processes": 1.0
+        },
+        "spotify": {
+          "pss": 978.37,
+          "rss": 1588.14,
+          "uss": 807.21,
+          "swap": 0.0,
+          "processes": 9.0
+        }
+      }
+    },
+    {
+      "mode": "baseline",
+      "shell": {
+        "pss": 45.41,
+        "rss": 107.88,
+        "uss": 29.96,
+        "swap": 0.0
+      },
+      "apps": {
+        "receiver": {
+          "pss": 28.22,
+          "rss": 39.81,
+          "uss": 26.19,
+          "swap": 3.17,
+          "processes": 1.0
+        },
+        "spotify": {
+          "pss": 978.43,
+          "rss": 1588.17,
+          "uss": 807.25,
+          "swap": 0.0,
+          "processes": 9.0
+        }
+      }
+    },
+    {
+      "mode": "baseline",
+      "shell": {
+        "pss": 45.28,
+        "rss": 107.81,
+        "uss": 29.82,
+        "swap": 0.0
+      },
+      "apps": {
+        "receiver": {
+          "pss": 28.22,
+          "rss": 39.81,
+          "uss": 26.19,
+          "swap": 3.17,
+          "processes": 1.0
+        },
+        "spotify": {
+          "pss": 1032.42,
+          "rss": 1660.09,
+          "uss": 843.27,
+          "swap": 0.0,
+          "processes": 9.0
+        }
+      }
+    },
+    {
+      "mode": "omafy",
+      "shell": {
+        "pss": 49.67,
+        "rss": 116.42,
+        "uss": 32.98,
+        "swap": 0.0
+      },
+      "apps": {
+        "receiver": {
+          "pss": 28.01,
+          "rss": 39.81,
+          "uss": 26.13,
+          "swap": 3.17,
+          "processes": 1.0
+        },
+        "spotify": {
+          "pss": 1032.32,
+          "rss": 1659.95,
+          "uss": 843.27,
+          "swap": 0.0,
+          "processes": 9.0
+        }
+      }
+    }
+  ]
+}

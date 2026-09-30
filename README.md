@@ -1,29 +1,37 @@
 # Omafy
 
-Spotify for the Omarchy bar without the Spotify app: a Web API remote
-control in the bar plus a ~30-50 MB librespot receiver that plays audio
-locally as the Spotify Connect device "Omafy".
+Spotify in your bar. Play, pause, skip, search, and queue music without opening
+the Spotify app. A small librespot receiver plays audio locally as **Omafy**.
+
+**Tiny footprint: ~34 MiB estimated total RAM vs ~1 GiB for Spotify** in a local
+comparison — about **97% less**. This includes the receiver, service, and two
+bar widgets. [Measurement details](#memory-footprint).
+
+Requires Omarchy Quattro with Quickshell, Python 3, Bash/coreutils, `xdg-open`,
+and Spotify API access. Local playback also requires `librespot` with its
+PulseAudio backend and a working PulseAudio-compatible server (such as
+PipeWire-Pulse). Playback control requires Spotify Premium.
 
 ## Setup
 
-1. In the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard),
-   open the app for client ID `8830ae6c6cd24316aa148cd3cce88bdb` and add this
-   **Redirect URI**, then save:
+1. Install and enable the bar widget:
+
+   ```bash
+   omarchy plugin add https://github.com/Jared-Mac/omafy --enable
+   ```
+
+2. Create an app in the
+   [Spotify Developer Dashboard](https://developer.spotify.com/dashboard).
+   Add this **Redirect URI**, then save:
 
    ```
    http://127.0.0.1:8989/login
    ```
 
-   While the app is in Development mode, your Spotify account must also be
-   listed under **User Management**.
-
-2. Install the plugin by linking this checkout into the plugin directory:
-
-   ```bash
-   ln -sfn ~/Work/omafy ~/.config/omarchy/plugins/jaredm.omafy
-   omarchy-shell shell rescanPlugins
-   omarchy plugin enable jaredm.omafy
-   ```
+   Set **Spotify Developer client ID** in Omafy's widget settings to your app's
+   client ID. The bundled ID belongs to the maintainer's development app;
+   other users should use their own. While your app is in Development mode,
+   add your Spotify account under **User Management**.
 
 3. Click **Connect Spotify** in the bar and approve access in the browser.
 
@@ -32,7 +40,7 @@ locally as the Spotify Connect device "Omafy".
 
    ```bash
    omarchy pkg add librespot
-   bin/omafy-player setup     # also: start | stop | restart | status | logout
+   ~/.config/omarchy/plugins/jaredm.omafy/bin/omafy-player setup
    ```
 
    Then middle-click the widget, or use **Play on this computer** in the popup.
@@ -69,7 +77,46 @@ Keybinding-friendly IPC:
 omarchy-shell omafy playPause   # also: playHere, next, previous, like, volumeUp, volumeDown, login, status, search, browse
 ```
 
-Playback control requires Spotify Premium. Free accounts still see what's playing.
+The player helper also accepts `start`, `stop`, `restart`, `status`, and `logout`.
+
+## Memory footprint
+
+Local measurement on September 29, 2026, using proportional set size (PSS) to
+avoid counting shared memory twice:
+
+| Component | RAM |
+|---|---:|
+| Omafy receiver | 28 MiB |
+| Omafy service + two bar widgets, estimated added cost | 6 MiB |
+| **Omafy total, estimated** | **34 MiB** |
+| **Spotify desktop, all nine processes** | **978–1,032 MiB** |
+
+The widget estimate comes from three paired fresh offscreen shell runs with
+and without Omafy, using the current cached state and closed popups. The common
+shell baseline is subtracted; receiver and Spotify memory were sampled live.
+This is one local comparison, not a fixed memory guarantee.
+[Raw measurements](benchmarks/2026-09-29-memory.json).
+
+## Remove
+
+Stop the receiver, remove its credentials, and disconnect the bar before
+removing the plugin:
+
+```bash
+~/.config/omarchy/plugins/jaredm.omafy/bin/omafy-player logout
+~/.config/omarchy/plugins/jaredm.omafy/bin/omafy-auth logout
+omarchy plugin remove jaredm.omafy
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omafy-player.service"
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/omafy-player.service.d/10-omafy-cache.conf"
+systemctl --user daemon-reload
+```
+
+Cached artwork metadata and audio remain under `${XDG_CACHE_HOME:-~/.cache}/omafy`;
+you can delete that directory to reclaim the disk space.
+
+## License
+
+[MIT](LICENSE). Librespot is a separate dependency with its own license.
 
 ## Caching
 

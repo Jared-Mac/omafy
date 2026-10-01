@@ -38,6 +38,86 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, expected_exit)
         return json.loads(output.getvalue())
 
+    def test_save_ignores_legacy_temporary_symlink(self):
+        victim = Path(self.temp.name) / "unrelated.txt"
+        victim.write_text("keep this")
+        legacy = self.state / "token.json.tmp"
+        legacy.symlink_to(victim)
+        replacement = {**self.original, "access_token": "replacement"}
+        self.auth["save_tokens"](replacement)
+        self.assertEqual(victim.read_text(), "keep this")
+        self.assertEqual(legacy.readlink(), victim)
+        self.assertFalse(self.tokens.is_symlink())
+        self.assertEqual(json.loads(self.tokens.read_text()), replacement)
+        self.assertEqual(self.tokens.stat().st_mode & 0o777, 0o600)
+
+    def test_save_ignores_permissive_legacy_temporary_file(self):
+        legacy = self.state / "token.json.tmp"
+        legacy.write_text("keep this")
+        legacy.chmod(0o666)
+        self.tokens.chmod(0o666)
+        self.auth["save_tokens"](self.original)
+        self.assertEqual(legacy.read_text(), "keep this")
+        self.assertEqual(legacy.stat().st_mode & 0o777, 0o666)
+        self.assertEqual(self.tokens.stat().st_mode & 0o777, 0o600)
+
+    def test_save_is_private_before_writing_and_atomic_until_replace(self):
+        replacement = {**self.original, "access_token": "replacement"}
+        dump = json.dump
+        observed_modes = []
+
+        def observe_write(data, stream):
+            observed_modes.append(os.fstat(stream.fileno()).st_mode & 0o777)
+            self.assertEqual(json.loads(self.tokens.read_text()), self.original)
+            dump(data, stream)
+
+        # Privacy must not depend on a caller's umask. A restrictive umask must
+        # also yield a readable 0600 token file after the descriptor chmod.
+        for mask in (0, 0o777):
+            with self.subTest(umask=mask):
+                old_mask = os.umask(mask)
+                try:
+                    with patch.object(json, "dump", observe_write):
+                        self.auth["save_tokens"](replacement)
+                finally:
+                    os.umask(old_mask)
+                self.assertEqual(json.loads(self.tokens.read_text()), replacement)
+                self.assertEqual(self.tokens.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(list(self.state.glob(".token-*.tmp")), [])
+                self.auth["save_tokens"](self.original)
+        self.assertEqual(observed_modes, [0o600, 0o600])
+
+    def test_save_replaces_destination_symlink_without_touching_target(self):
+        victim = Path(self.temp.name) / "unrelated.txt"
+        victim.write_text("keep this")
+        self.tokens.unlink()
+        self.tokens.symlink_to(victim)
+        self.auth["save_tokens"](self.original)
+        self.assertEqual(victim.read_text(), "keep this")
+        self.assertFalse(self.tokens.is_symlink())
+        self.assertEqual(json.loads(self.tokens.read_text()), self.original)
+
+    def test_failed_serialization_preserves_saved_tokens_and_removes_partial_file(self):
+        with self.assertRaises(TypeError):
+            self.auth["save_tokens"]({"access_token": "partial-token", "invalid": object()})
+        self.assertEqual(json.loads(self.tokens.read_text()), self.original)
+        self.assertEqual(list(self.state.iterdir()), [self.tokens])
+
+    def test_failed_permission_change_writes_no_tokens_and_cleans_up(self):
+        with patch.object(os, "fchmod", side_effect=OSError("chmod failed")):
+            with patch.object(json, "dump", side_effect=AssertionError("must not write tokens")):
+                with self.assertRaisesRegex(OSError, "chmod failed"):
+                    self.auth["save_tokens"]({**self.original, "access_token": "replacement"})
+        self.assertEqual(json.loads(self.tokens.read_text()), self.original)
+        self.assertEqual(list(self.state.iterdir()), [self.tokens])
+
+    def test_failed_atomic_replace_preserves_saved_tokens_and_cleans_up(self):
+        with patch.object(os, "replace", side_effect=OSError("replace failed")):
+            with self.assertRaisesRegex(OSError, "replace failed"):
+                self.auth["save_tokens"]({**self.original, "access_token": "replacement"})
+        self.assertEqual(json.loads(self.tokens.read_text()), self.original)
+        self.assertEqual(list(self.state.iterdir()), [self.tokens])
+
     def test_cached_token_does_not_refresh(self):
         with patch.dict(self.auth, token_request=lambda _: self.fail("unexpected network request")):
             output = self.command("cmd_token", argparse.Namespace(force_refresh=False))

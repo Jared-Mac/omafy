@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "jaredm.omafy",
   "name": "Omafy",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Jared",
   "license": "MIT",
   "description": "Spotify in your bar. Tiny footprint: ~34 MiB RAM vs ~1 GiB for Spotify in a local test.",

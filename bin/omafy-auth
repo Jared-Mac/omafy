@@ -22,6 +22,7 @@ import os
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -70,11 +71,19 @@ def load_tokens():
 
 def save_tokens(data):
     os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
-    tmp = TOKEN_PATH + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f)
-    os.replace(tmp, TOKEN_PATH)
+    # mkstemp exclusively creates a new file beside the destination, so an
+    # existing file/symlink cannot be reused and replacement stays atomic.
+    fd, tmp = tempfile.mkstemp(prefix=".token-", suffix=".tmp", dir=STATE_DIR)
+    try:
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, TOKEN_PATH)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
 
 
 @contextlib.contextmanager

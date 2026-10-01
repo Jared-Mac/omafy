@@ -178,6 +178,8 @@ bash tests/run.sh
 
 Requires Node.js and Python 3. Tests cover authentication races, account cache
 isolation, pagination, command failures, playback sequencing, and receiver
-setup. When Quickshell is installed, the runner also loads the service offscreen
+setup. When Quickshell is installed, a rendering test checks that notices and
+API errors containing HTML display literally without fetching embedded images
+from a local test server. The runner also loads the service offscreen
 with temporary state and cache directories. Tests use dummy credentials and
 mock network/service calls; they do not control Spotify playback.

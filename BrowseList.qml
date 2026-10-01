@@ -31,6 +31,7 @@ ListView {
     height: isHeader ? headerText.implicitHeight + Style.space(12) : mediaRow.height
 
     Text {
+      textFormat: Text.PlainText
       id: headerText
       visible: entry.isHeader
       anchors.left: parent.left
@@ -63,6 +64,7 @@ ListView {
   }
 
   Text {
+    textFormat: Text.PlainText
     anchors.centerIn: parent
     width: parent.width - Style.space(24)
     visible: list.count === 0 && list.emptyText !== ""

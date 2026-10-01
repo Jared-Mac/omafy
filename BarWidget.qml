@@ -132,6 +132,7 @@ Panel {
       spacing: Style.space(6)
 
       Text {
+        textFormat: Text.PlainText
         id: glyph
         anchors.verticalCenter: parent.verticalCenter
         text: barButton.vertical || root.labelText === "" ? "󰓇" : ""
@@ -186,6 +187,7 @@ Panel {
           visible: !root.loggedIn
 
           Text {
+            textFormat: Text.PlainText
             text: "Spotify"
             color: root.popupForeground
             font.family: root.fontFamily
@@ -194,6 +196,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             wrapMode: Text.Wrap
             text: root.service && root.service.loggingIn
@@ -224,6 +227,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             wrapMode: Text.Wrap
             text: "Your Spotify app must list this Redirect URI exactly:"
@@ -301,6 +305,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 visible: !root.service || !root.service.artUrl
                 text: "󰝚"
@@ -393,6 +398,7 @@ Panel {
               height: elapsed.implicitHeight
 
               Text {
+                textFormat: Text.PlainText
                 id: elapsed
                 text: Spotify.formatTime(root.service ? root.service.position : 0)
                 color: root.muted
@@ -401,6 +407,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 anchors.right: parent.right
                 text: Spotify.formatTime(root.service ? root.service.durationMs : 0)
                 color: root.muted
@@ -472,6 +479,7 @@ Panel {
             visible: root.loggedIn && root.hasTrack && root.service.supportsVolume
 
             Text {
+              textFormat: Text.PlainText
               id: volumeGlyph
               anchors.verticalCenter: parent.verticalCenter
               text: root.service && root.service.volume === 0 ? "󰝟" : "󰕾"
@@ -493,6 +501,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               id: volumeText
               anchors.verticalCenter: parent.verticalCenter
               width: Style.space(30)
@@ -512,6 +521,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.loggedIn
             text: "Devices"
             color: root.muted
@@ -521,6 +531,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.loggedIn && root.service && root.service.devices.length === 0
             width: parent.width
             wrapMode: Text.Wrap
@@ -551,6 +562,7 @@ Panel {
                   : active ? Style.selectedFillFor(root.popupForeground, Color.accent) : "transparent"
 
                 Text {
+                  textFormat: Text.PlainText
                   id: deviceGlyph
                   anchors.left: parent.left
                   anchors.leftMargin: Style.space(8)
@@ -579,6 +591,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   id: deviceState
                   anchors.right: parent.right
                   anchors.rightMargin: Style.space(8)
@@ -606,6 +619,7 @@ Panel {
             visible: root.loggedIn
 
             Text {
+              textFormat: Text.PlainText
               id: signOut
               anchors.right: parent.right
               text: "Disconnect"
@@ -644,6 +658,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             visible: text !== ""
             wrapMode: Text.Wrap
@@ -682,6 +697,7 @@ Panel {
             visible: root.service && root.service.needsReconnect
 
             Text {
+              textFormat: Text.PlainText
               width: parent.width - reconnectButton.width - parent.spacing
               anchors.verticalCenter: parent.verticalCenter
               wrapMode: Text.Wrap
@@ -706,6 +722,7 @@ Panel {
             visible: root.service && !root.service.openList
 
             Text {
+              textFormat: Text.PlainText
               width: parent.width
               visible: text !== ""
               wrapMode: Text.Wrap
@@ -784,6 +801,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               width: parent.width
               visible: text !== ""
               wrapMode: Text.Wrap
@@ -816,6 +834,7 @@ Panel {
           visible: root.loggedIn && root.tab === "queue"
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             visible: text !== ""
             wrapMode: Text.Wrap
@@ -842,6 +861,7 @@ Panel {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           visible: root.loggedIn && text !== ""
           wrapMode: Text.Wrap
@@ -851,6 +871,7 @@ Panel {
           font.pixelSize: Style.font.caption
         }
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           visible: root.service && root.service.lastError !== ""
           wrapMode: Text.Wrap

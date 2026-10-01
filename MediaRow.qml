@@ -50,6 +50,7 @@ Rectangle {
     }
 
     Text {
+      textFormat: Text.PlainText
       anchors.centerIn: parent
       visible: art.status !== Image.Ready
       text: row.item.glyph || (row.item.kind === "artist" ? "󰀄" : row.item.kind === "playlist" ? "󰲸" : "󰝚")
@@ -98,6 +99,7 @@ Rectangle {
     spacing: Style.space(6)
 
     Text {
+      textFormat: Text.PlainText
       id: queueGlyph
       visible: row.queueable && mouse.containsMouse
       anchors.verticalCenter: parent.verticalCenter
@@ -117,6 +119,7 @@ Rectangle {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: row.chevron
       anchors.verticalCenter: parent.verticalCenter
       text: "󰅂"
